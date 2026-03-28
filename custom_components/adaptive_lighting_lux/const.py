@@ -15,7 +15,7 @@ ICON_BRIGHTNESS = "mdi:brightness-4"
 ICON_COLOR_TEMP = "mdi:sun-thermometer"
 ICON_SLEEP = "mdi:sleep"
 
-DOMAIN = "adaptive_lighting"
+DOMAIN = "adaptive_lighting_lux"
 
 
 class TakeOverControlMode(Enum):

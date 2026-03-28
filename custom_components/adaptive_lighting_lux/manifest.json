@@ -1,5 +1,5 @@
 {
-  "domain": "adaptive_lighting",
+  "domain": "adaptive_lighting_lux",
   "name": "Adaptive Lighting (Lux Curves)",
   "codeowners": ["@basnijholt", "@RubenKelevra", "@th3w1zard1", "@protyposis"],
   "config_flow": true,

@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import math
+import time
 import zoneinfo
+from collections import deque
 from copy import deepcopy
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -69,8 +72,10 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.sun import get_astral_location
 from homeassistant.util import slugify
 from homeassistant.util.color import (
+    color_RGB_to_xy,
     color_temperature_to_rgb,
     color_xy_to_RGB,
+    color_xy_to_hs,
 )
 
 from .adaptation_utils import (
@@ -102,6 +107,9 @@ from .const import (
     CONF_INTERCEPT,
     CONF_INTERVAL,
     CONF_LIGHTS,
+    CONF_LUX_BRIGHTNESS_CURVE,
+    CONF_LUX_COLOR_TEMP_CURVE,
+    CONF_LUX_SENSOR,
     CONF_MANUAL_CONTROL,
     CONF_MAX_BRIGHTNESS,
     CONF_MAX_COLOR_TEMP,
@@ -150,9 +158,11 @@ from .const import (
 )
 from .hass_utils import area_entities, setup_service_call_interceptor
 from .helpers import (
+    catmull_rom_interpolate,
     clamp,
     color_difference_redmean,
     int_to_base36,
+    parse_lux_curve,
     remove_vowels,
     short_hash,
 )
@@ -866,6 +876,9 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         # Set in self._update_attrs_and_maybe_adapt_lights
         self._settings: dict[str, Any] = {}
 
+        # Rolling buffer of (timestamp, lux_value) for noise-filtered averaging
+        self._lux_buffer: deque[tuple[float, float]] = deque()
+
         # Set and unset tracker in async_turn_on and async_turn_off
         self.remove_listeners: list[CALLBACK_TYPE] = []
         self.remove_interval: CALLBACK_TYPE = lambda: None
@@ -943,6 +956,13 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
                 self._name,
             )
             self._multi_light_intercept = False
+        self._lux_sensor = data.get(CONF_LUX_SENSOR, "")
+        self._lux_brightness_curve = parse_lux_curve(
+            data.get(CONF_LUX_BRIGHTNESS_CURVE, ""),
+        )
+        self._lux_color_temp_curve = parse_lux_curve(
+            data.get(CONF_LUX_COLOR_TEMP_CURVE, ""),
+        )
         self._expand_light_groups()  # updates manual control timers
         location, _ = get_astral_location(self.hass)
 
@@ -977,6 +997,73 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             self.lights,
             data,
         )
+
+    def _read_lux_sensor(self) -> float | None:
+        """Read the current lux value from the configured sensor."""
+        if not self._lux_sensor:
+            return None
+        state = self.hass.states.get(self._lux_sensor)
+        if state is None or state.state in ("unknown", "unavailable"):
+            _LOGGER.debug(
+                "%s: Lux sensor '%s' is unavailable, skipping lux override",
+                self._name,
+                self._lux_sensor,
+            )
+            return None
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            _LOGGER.warning(
+                "%s: Could not parse lux sensor '%s' state '%s' as float",
+                self._name,
+                self._lux_sensor,
+                state.state,
+            )
+            return None
+
+    def _get_averaged_lux(self) -> float | None:
+        """Get noise-filtered lux by averaging readings over the adaptation interval."""
+        if not self._lux_sensor:
+            return None
+        now = time.monotonic()
+        window = self._interval.total_seconds()
+        # Prune old entries
+        while self._lux_buffer and (now - self._lux_buffer[0][0]) > window:
+            self._lux_buffer.popleft()
+        if self._lux_buffer:
+            return sum(v for _, v in self._lux_buffer) / len(self._lux_buffer)
+        # Buffer empty (e.g., just configured) - fall back to instantaneous read
+        return self._read_lux_sensor()
+
+    def _apply_lux_overrides(self, settings: dict[str, Any]) -> None:
+        """Override brightness/color_temp with lux-curve-derived values."""
+        if not self._lux_sensor:
+            return
+        if not self._lux_brightness_curve and not self._lux_color_temp_curve:
+            return
+        if self.sleep_mode_switch.is_on:
+            return
+        lux = self._get_averaged_lux()
+        if lux is None:
+            return
+
+        if self._lux_brightness_curve:
+            brightness = catmull_rom_interpolate(self._lux_brightness_curve, lux)
+            settings["brightness_pct"] = clamp(brightness, 1, 100)
+
+        if self._lux_color_temp_curve:
+            ct = catmull_rom_interpolate(self._lux_color_temp_curve, lux)
+            ct = int(5 * round(ct / 5))  # round to nearest 5K
+            ct = int(clamp(ct, 1000, 10000))
+            settings["color_temp_kelvin"] = ct
+            # Recalculate derived color values
+            settings["color_temp_mired"] = math.floor(1000000 / ct)
+            if not settings.get("force_rgb_color", False):
+                r, g, b = color_temperature_to_rgb(ct)
+                rgb_color = (round(r), round(g), round(b))
+                settings["rgb_color"] = rgb_color
+                settings["xy_color"] = color_RGB_to_xy(*rgb_color)
+                settings["hs_color"] = color_xy_to_hs(*settings["xy_color"])
 
     @property
     def name(self) -> str:
@@ -1052,6 +1139,15 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         )
 
         self.remove_listeners.append(remove_sleep)
+
+        if self._lux_sensor:
+            remove_lux = async_track_state_change_event(
+                self.hass,
+                entity_ids=self._lux_sensor,
+                action=self._lux_sensor_state_event_action,
+            )
+            self.remove_listeners.append(remove_lux)
+
         self._expand_light_groups()
 
     def _update_time_interval_listener(self) -> None:
@@ -1225,6 +1321,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             self.sleep_mode_switch.is_on,
             transition,
         )
+        self._apply_lux_overrides(self._settings)
 
         # Build service data.
         service_data: dict[str, Any] = {ATTR_ENTITY_ID: light}
@@ -1424,6 +1521,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
                 transition,
             ),
         )
+        self._apply_lux_overrides(self._settings)
         self.async_write_ha_state()
 
         if not force and self._only_once:
@@ -1585,6 +1683,21 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             transition=self._sleep_transition,
             force=True,
         )
+
+    @callback
+    def _lux_sensor_state_event_action(
+        self,
+        event: Event[EventStateChangedData],
+    ) -> None:
+        """Buffer lux sensor readings for noise-filtered averaging."""
+        new_state = event.data.get("new_state")
+        if new_state is None or new_state.state in ("unknown", "unavailable"):
+            return
+        try:
+            lux_value = float(new_state.state)
+        except (ValueError, TypeError):
+            return
+        self._lux_buffer.append((time.monotonic(), lux_value))
 
     def fire_manual_control_event(
         self,

@@ -89,6 +89,77 @@ def color_difference_redmean(
     return math.sqrt(red_term + green_term + blue_term)
 
 
+def parse_lux_curve(curve_str: str) -> list[tuple[float, float]]:
+    """Parse a lux curve string into sorted (lux, value) pairs.
+
+    Format: "lux1:val1, lux2:val2, ..." e.g. "0:100, 200:80, 500:40, 1000:10"
+    """
+    if not curve_str or not curve_str.strip():
+        return []
+    points: list[tuple[float, float]] = []
+    for entry in curve_str.split(","):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        lux_str, val_str = entry.split(":", 1)
+        points.append((float(lux_str.strip()), float(val_str.strip())))
+    points.sort(key=lambda p: p[0])
+    return points
+
+
+def catmull_rom_interpolate(
+    points: list[tuple[float, float]],
+    x: float,
+) -> float:
+    """Interpolate using Catmull-Rom spline through sorted (x, y) points.
+
+    Provides smooth C1-continuous interpolation. Outside the defined range,
+    returns the nearest endpoint value.
+    """
+    if not points:
+        msg = "No curve points defined"
+        raise ValueError(msg)
+    if len(points) == 1:
+        return points[0][1]
+
+    # Clamp to endpoints
+    if x <= points[0][0]:
+        return points[0][1]
+    if x >= points[-1][0]:
+        return points[-1][1]
+
+    # Two points: simple linear interpolation
+    if len(points) == 2:
+        t = (x - points[0][0]) / (points[1][0] - points[0][0])
+        return points[0][1] + t * (points[1][1] - points[0][1])
+
+    # Find the segment containing x
+    seg = 0
+    for i in range(len(points) - 1):
+        if points[i][0] <= x <= points[i + 1][0]:
+            seg = i
+            break
+
+    # Four control points (duplicate endpoints for edge segments)
+    p0 = points[max(seg - 1, 0)][1]
+    p1 = points[seg][1]
+    p2 = points[seg + 1][1]
+    p3 = points[min(seg + 2, len(points) - 1)][1]
+
+    # Parameter t in [0, 1] within this segment
+    t = (x - points[seg][0]) / (points[seg + 1][0] - points[seg][0])
+    t2 = t * t
+    t3 = t2 * t
+
+    # Catmull-Rom polynomial
+    return 0.5 * (
+        (2.0 * p1)
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+    )
+
+
 def get_friendly_name(hass: HomeAssistant, entity_id: str) -> str:
     """Retrieve the friendly name of an entity."""
     state = hass.states.get(entity_id)

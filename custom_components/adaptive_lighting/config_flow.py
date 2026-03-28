@@ -11,6 +11,7 @@ from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
 
 from .const import (  # pylint: disable=unused-import
     CONF_LIGHTS,
+    CONF_LUX_SENSOR,
     DOMAIN,
     EXTRA_VALIDATION,
     NONE_STR,
@@ -150,6 +151,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 EntitySelectorConfig(
                     domain="light",
                     multiple=True,
+                ),
+            ),
+            CONF_LUX_SENSOR: EntitySelector(
+                EntitySelectorConfig(
+                    domain="sensor",
+                    device_class="illuminance",
+                    multiple=False,
                 ),
             ),
         }

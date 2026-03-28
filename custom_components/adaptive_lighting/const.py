@@ -196,6 +196,29 @@ DOCS[CONF_BRIGHTNESS_MODE_TIME_LIGHT] = (
     "the brightness after/before sunrise/sunset. 📈📉."
 )
 
+CONF_LUX_SENSOR, DEFAULT_LUX_SENSOR = "lux_sensor", ""
+DOCS[CONF_LUX_SENSOR] = (
+    "Entity ID of an illuminance (lux) sensor. When set along with lux curves, "
+    "brightness and/or color temperature are driven by the lux reading instead of "
+    "the sun position. Leave empty to use the default sun-based mode. 💡"
+)
+
+CONF_LUX_BRIGHTNESS_CURVE, DEFAULT_LUX_BRIGHTNESS_CURVE = "lux_brightness_curve", ""
+DOCS[CONF_LUX_BRIGHTNESS_CURVE] = (
+    "Lux-to-brightness mapping as comma-separated `lux:brightness` pairs "
+    '(e.g., `"0:100, 200:80, 500:40, 1000:10"`). '
+    "Values are smoothly interpolated between points. "
+    "Requires `lux_sensor` to be set. 📈"
+)
+
+CONF_LUX_COLOR_TEMP_CURVE, DEFAULT_LUX_COLOR_TEMP_CURVE = "lux_color_temp_curve", ""
+DOCS[CONF_LUX_COLOR_TEMP_CURVE] = (
+    "Lux-to-color-temperature mapping as comma-separated `lux:kelvin` pairs "
+    '(e.g., `"0:2000, 200:3000, 500:4500, 1000:5500"`). '
+    "Values are smoothly interpolated between points. "
+    "Requires `lux_sensor` to be set. 🌡️"
+)
+
 CONF_TAKE_OVER_CONTROL, DEFAULT_TAKE_OVER_CONTROL = "take_over_control", True
 DOCS[CONF_TAKE_OVER_CONTROL] = (
     "Pause adaptation of individual lights and hand over (manual) control to other sources that "
@@ -371,6 +394,9 @@ VALIDATION_TUPLES: list[tuple[str, Any, Any]] = [
     ),
     (CONF_BRIGHTNESS_MODE_TIME_DARK, DEFAULT_BRIGHTNESS_MODE_TIME_DARK, int),
     (CONF_BRIGHTNESS_MODE_TIME_LIGHT, DEFAULT_BRIGHTNESS_MODE_TIME_LIGHT, int),
+    (CONF_LUX_SENSOR, DEFAULT_LUX_SENSOR, str),
+    (CONF_LUX_BRIGHTNESS_CURVE, DEFAULT_LUX_BRIGHTNESS_CURVE, str),
+    (CONF_LUX_COLOR_TEMP_CURVE, DEFAULT_LUX_COLOR_TEMP_CURVE, str),
     (CONF_TAKE_OVER_CONTROL, DEFAULT_TAKE_OVER_CONTROL, bool),
     (
         CONF_TAKE_OVER_CONTROL_MODE,
